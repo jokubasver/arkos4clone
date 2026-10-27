@@ -1,0 +1,47 @@
+#!/bin/sh
+# List the GameCube and Wii systems in EmulationStation only when the Vulkan
+# driver is linked in (set up by mali-select): Dolphin is Vulkan-only, and the
+# 4.4 kernel's Mali driver has no Vulkan. Every es_systems.cfg variant is
+# stripped of gc/wii and, with Vulkan, gets the matching fragment appended.
+# The Dolphin build also needs glibc 2.38, which the ArkOS layer lacks.
+set -u
+
+dir=/etc/emulationstation
+frag=/usr/share/arkos4clone/dolphin-systems
+
+vulkan=0
+if [ -e /usr/lib/aarch64-linux-gnu/libMaliVulkan.so.1 ] &&
+   [ -x /opt/dolphin/dolphin-emu-nogui ] &&
+   [ "$(ldd --version | sed -n '1s/.* //p' | tr -d .)" -ge 238 ]; then
+    vulkan=1
+fi
+
+for suffix in "" .sd1 .sd2 .dual; do
+    cfg=$dir/es_systems.cfg$suffix
+    [ -f "$cfg" ] || continue
+    case $suffix in
+    .sd2)  part=roms2 ;;
+    .dual) part=dual ;;
+    *)     part=roms ;;
+    esac
+
+    tmp=$cfg.new
+    awk -v frag="$frag/$part" -v vulkan="$vulkan" '
+        /<system>/ { inside = 1; buf = "" }
+        inside { buf = buf $0 "\n" }
+        inside && /<name>(gc|wii)<\/name>/ { drop = 1 }
+        inside && /<\/system>/ { if (!drop) printf "%s", buf; inside = 0; drop = 0; next }
+        !inside && /<\/systemList>/ && vulkan == 1 {
+            while ((getline line < frag) > 0) print line
+        }
+        !inside { print }
+    ' "$cfg" > "$tmp" || { rm -f "$tmp"; continue; }
+
+    if cmp -s "$cfg" "$tmp"; then
+        rm -f "$tmp"
+    else
+        chmod --reference="$cfg" "$tmp"
+        mv -f "$tmp" "$cfg"
+    fi
+done
+exit 0
